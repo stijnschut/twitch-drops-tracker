@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# User-managed runtime files
+watchlist.json
+state.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Misc
+*.log
