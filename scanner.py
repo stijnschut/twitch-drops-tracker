@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -239,6 +240,27 @@ def drop_requirement(time_based_drop: dict[str, Any]) -> str:
     return " + ".join(parts) if parts else "—"
 
 
+_QUANTITY_SUFFIX_RE = re.compile(r"^(?P<name>.*?)\s*\*(?P<qty>\d+)$")
+
+
+def format_reward_name(time_based_drop: dict[str, Any]) -> str:
+    """Return the reward display name with its quantity moved to the front.
+
+    Many publishers encode quantity as a ``*N`` suffix (e.g.
+    ``Advanced Energy Bag*2``). Discord embeds read more naturally as
+    ``2x Advanced Energy Bag``, so normalise that one pattern while leaving
+    already-prefixed names (``5x Dungeon Key``) and plain names untouched.
+    """
+    name = drop_display_name(time_based_drop).strip()
+    match = _QUANTITY_SUFFIX_RE.match(name)
+    if match:
+        base = match.group("name").strip()
+        qty = match.group("qty")
+        if base:
+            return f"{qty}x {base}"
+    return name
+
+
 def reward_signature(reward: dict[str, Any]) -> str:
     """Stable fingerprint of a campaign's reward list.
 
@@ -342,9 +364,18 @@ def eligibility(reward: dict[str, Any]) -> str:
 
 def build_reward_lines(reward: dict[str, Any]) -> str:
     drops = reward.get("timeBasedDrops") or []
+
+    def sort_key(tbd: dict[str, Any]) -> tuple[int, int]:
+        minutes = tbd.get("requiredMinutesWatched") or 0
+        # Watch-time rewards first (shortest first); non-watch rewards
+        # (subscriptions, etc.) are pushed to the end.
+        return (0 if minutes else 1, minutes)
+
+    drops = sorted(drops, key=sort_key)
+
     lines: list[str] = []
     for tbd in drops:
-        lines.append(f"• **{drop_display_name(tbd)}** — {drop_requirement(tbd)}")
+        lines.append(f"• **{format_reward_name(tbd)}** — {drop_requirement(tbd)}")
 
     if not drops:
         if reward.get("eventBasedDrops"):
@@ -385,6 +416,7 @@ def build_embed(
     body_parts = []
     if description:
         body_parts.append(description[:1200])
+        body_parts.append("")  # Blank line between the description and "Rewards".
     body_parts.append("**Rewards**")
     body_parts.append(build_reward_lines(reward))
     embed_description = "\n".join(body_parts)[:4096]
@@ -394,26 +426,16 @@ def build_embed(
         "description": embed_description,
         "color": colors[event],
         "fields": [
-            {"name": "Game", "value": game_name[:1024], "inline": True},
-            {
-                "name": "Starts",
-                "value": format_dt(reward.get("startAt")),
-                "inline": True,
-            },
-            {
-                "name": "Ends",
-                "value": format_dt(reward.get("endAt")),
-                "inline": True,
-            },
+            {"name": "Game", "value": game_name[:1024]},
+            {"name": "Starts", "value": format_dt(reward.get("startAt"))},
+            {"name": "Ends", "value": format_dt(reward.get("endAt"))},
             {
                 "name": "Status",
                 "value": str(reward.get("status") or "Unknown"),
-                "inline": True,
             },
             {
                 "name": "Eligibility",
                 "value": eligibility(reward)[:1024],
-                "inline": True,
             },
         ],
         "timestamp": iso(now),
