@@ -110,6 +110,20 @@ def _timezone() -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def _date_format(tz: ZoneInfo) -> str:
+    """Return a locale-appropriate date format for the configured timezone.
+
+    North/South America uses MM-DD-YYYY, Europe uses DD-MM-YYYY, and
+    everything else (including East Asia) keeps the ISO YYYY-MM-DD order.
+    """
+    key = tz.key
+    if key.startswith("America/"):
+        return "%m-%d-%Y"
+    if key.startswith("Europe/"):
+        return "%d-%m-%Y"
+    return "%Y-%m-%d"
+
+
 def format_dt(value: Any) -> str:
     if isinstance(value, dt.datetime):
         parsed = value
@@ -117,7 +131,8 @@ def format_dt(value: Any) -> str:
         parsed = parse_dt(value)
     if parsed is None:
         return "Unknown"
-    return parsed.astimezone(_timezone()).strftime("%Y-%m-%d %H:%M %Z")
+    tz = _timezone()
+    return parsed.astimezone(tz).strftime(f"{_date_format(tz)} %H:%M %Z")
 
 
 def iso(value: dt.datetime) -> str:
