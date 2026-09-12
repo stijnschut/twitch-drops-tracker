@@ -72,7 +72,6 @@ COLOR_ENDING = 0xE74C3C
 COLOR_CHANGED = 0xF1C40F
 
 STATE_VERSION = 1
-PRUNE_AFTER_DAYS = 30
 
 log = logging.getLogger("twitch-drops-tracker")
 
@@ -586,13 +585,19 @@ def maybe_alert_failure(
 
 
 def prune_state(state: dict[str, Any], seen_ids: set[str], now: dt.datetime) -> None:
-    cutoff = now - dt.timedelta(days=PRUNE_AFTER_DAYS)
+    """Remove campaigns that are no longer worth tracking.
+
+    A campaign is dropped as soon as its stored end date has passed. Records
+    without a usable end date are only dropped once they are no longer
+    returned by the API, so a temporarily missing (but still active) campaign
+    does not get re-notified as new.
+    """
     for reward_id in list(state["campaigns"]):
-        if reward_id in seen_ids:
-            continue
         record = state["campaigns"][reward_id]
         end = parse_dt(record.get("end_at"))
-        if end is None or end < cutoff:
+        if end is not None and end <= now:
+            del state["campaigns"][reward_id]
+        elif end is None and reward_id not in seen_ids:
             del state["campaigns"][reward_id]
 
 
