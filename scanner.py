@@ -71,6 +71,13 @@ COLOR_STARTING = 0x1ABC9C
 COLOR_ENDING = 0xE74C3C
 COLOR_CHANGED = 0xF1C40F
 
+EVENT_COLORS = {
+    "new": COLOR_NEW,
+    "starting_soon": COLOR_STARTING,
+    "ending_soon": COLOR_ENDING,
+    "changed": COLOR_CHANGED,
+}
+
 STATE_VERSION = 1
 
 log = logging.getLogger("twitch-drops-tracker")
@@ -341,15 +348,64 @@ def send_webhook(embeds: list[dict[str, Any]]) -> bool:
         return False
 
 
+def _pick_sample_reward(
+    campaigns: list[dict[str, Any]],
+) -> tuple[Optional[dict[str, Any]], str, Optional[str]]:
+    """Find a live campaign with loot images to make the test look real."""
+    for item in campaigns:
+        if not isinstance(item, dict):
+            continue
+        game_name = str(item.get("gameDisplayName") or "").strip()
+        box_art = item.get("gameBoxArtURL")
+        for reward in item.get("rewards") or []:
+            if not isinstance(reward, dict):
+                continue
+            if any(
+                first_drop_image_url(tbd)
+                for tbd in reward.get("timeBasedDrops") or []
+            ):
+                return reward, game_name, box_art
+
+    # Fallback: any reward with at least one time-based drop, even without art.
+    for item in campaigns:
+        if not isinstance(item, dict):
+            continue
+        game_name = str(item.get("gameDisplayName") or "").strip()
+        box_art = item.get("gameBoxArtURL")
+        for reward in item.get("rewards") or []:
+            if isinstance(reward, dict) and reward.get("timeBasedDrops"):
+                return reward, game_name, box_art
+
+    return None, "", None
+
+
 def send_test_webhook() -> bool:
-    embed = {
-        "title": "✅ Twitch Drops Tracker — webhook test",
-        "description": "If you can see this, the Discord webhook is configured correctly.",
-        "color": COLOR_STARTING,
-        "timestamp": iso(now_utc()),
-        "footer": {"text": "Twitch Drops Tracker"},
-    }
-    ok = send_webhook([embed])
+    now = now_utc()
+    reward: Optional[dict[str, Any]] = None
+    game_name = ""
+    box_art: Optional[str] = None
+
+    try:
+        reward, game_name, box_art = _pick_sample_reward(fetch_drops())
+    except Exception as exc:
+        log.warning("Could not fetch a live campaign for the test: %s", exc)
+
+    if reward:
+        embeds = [build_embed(reward, game_name, box_art, "new", now)]
+        embeds += build_reward_image_embeds(reward, "new")[:9]
+        embeds[0]["footer"] = {"text": "Test message — Twitch Drops Tracker"}
+    else:
+        embeds = [
+            {
+                "title": "✅ Twitch Drops Tracker — webhook test",
+                "description": "If you can see this, the Discord webhook is configured correctly.",
+                "color": COLOR_STARTING,
+                "timestamp": iso(now),
+                "footer": {"text": "Twitch Drops Tracker"},
+            }
+        ]
+
+    ok = send_webhook(embeds)
     if ok:
         log.info("Test webhook sent successfully.")
     else:
@@ -376,16 +432,29 @@ def eligibility(reward: dict[str, Any]) -> str:
     return "Any channel"
 
 
+def _drop_sort_key(tbd: dict[str, Any]) -> tuple[int, int]:
+    minutes = tbd.get("requiredMinutesWatched") or 0
+    # Watch-time rewards first (shortest first); non-watch rewards
+    # (subscriptions, etc.) are pushed to the end.
+    return (0 if minutes else 1, minutes)
+
+
+def ordered_drops(reward: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(reward.get("timeBasedDrops") or [], key=_drop_sort_key)
+
+
+def first_drop_image_url(tbd: dict[str, Any]) -> Optional[str]:
+    """Return the first loot image URL for a time-based drop."""
+    for edge in tbd.get("benefitEdges") or []:
+        benefit = edge.get("benefit") or {}
+        url = benefit.get("imageAssetURL")
+        if url:
+            return str(url)
+    return None
+
+
 def build_reward_lines(reward: dict[str, Any]) -> str:
-    drops = reward.get("timeBasedDrops") or []
-
-    def sort_key(tbd: dict[str, Any]) -> tuple[int, int]:
-        minutes = tbd.get("requiredMinutesWatched") or 0
-        # Watch-time rewards first (shortest first); non-watch rewards
-        # (subscriptions, etc.) are pushed to the end.
-        return (0 if minutes else 1, minutes)
-
-    drops = sorted(drops, key=sort_key)
+    drops = ordered_drops(reward)
 
     lines: list[str] = []
     for tbd in drops:
@@ -404,6 +473,30 @@ def build_reward_lines(reward: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_reward_image_embeds(
+    reward: dict[str, Any], event: str
+) -> list[dict[str, Any]]:
+    """One embed per unique loot image, rendered as Discord's large image."""
+    color = EVENT_COLORS.get(event, COLOR_NEW)
+    embeds: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    for tbd in ordered_drops(reward):
+        url = first_drop_image_url(tbd)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        embeds.append(
+            {
+                "title": format_reward_name(tbd)[:256],
+                "image": {"url": url},
+                "color": color,
+            }
+        )
+
+    return embeds
+
+
 def build_embed(
     reward: dict[str, Any],
     game_name: str,
@@ -420,12 +513,6 @@ def build_embed(
         "ending_soon": f"⚠️ Ending soon: {reward_name}",
         "changed": f"🔁 Updated: {reward_name}",
     }
-    colors = {
-        "new": COLOR_NEW,
-        "starting_soon": COLOR_STARTING,
-        "ending_soon": COLOR_ENDING,
-        "changed": COLOR_CHANGED,
-    }
 
     body_parts = []
     if description:
@@ -438,7 +525,7 @@ def build_embed(
     embed: dict[str, Any] = {
         "title": titles[event][:256],
         "description": embed_description,
-        "color": colors[event],
+        "color": EVENT_COLORS[event],
         "fields": [
             {"name": "Game", "value": game_name[:1024]},
             {"name": "Starts", "value": format_dt(reward.get("startAt"))},
@@ -702,8 +789,11 @@ def run_scan(dry_run: bool = False) -> list[dict[str, Any]]:
                 )
                 continue
 
-            embed = build_embed(reward, game_name, box_art, event, now)
-            if not send_webhook([embed]):
+            embeds = [build_embed(reward, game_name, box_art, event, now)]
+            # Discord caps a webhook message at 10 embeds, so keep the main
+            # embed and show at most 9 loot images.
+            embeds += build_reward_image_embeds(reward, event)[:9]
+            if not send_webhook(embeds):
                 # Keep the event un-notified so it is retried on the next scan.
                 log.warning("Skipping state update for %s (send failed).", reward_id)
                 continue
