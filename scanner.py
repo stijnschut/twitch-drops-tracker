@@ -391,8 +391,15 @@ def send_test_webhook() -> bool:
         log.warning("Could not fetch a live campaign for the test: %s", exc)
 
     if reward:
-        embeds = [build_embed(reward, game_name, box_art, "new", now)]
-        embeds += build_reward_image_embeds(reward, "new")[:9]
+        image_urls = unique_drop_images(reward)
+        main_image = image_urls[0] if len(image_urls) == 1 else None
+        embeds = [
+            build_embed(
+                reward, game_name, box_art, "new", now, image_url=main_image
+            )
+        ]
+        if len(image_urls) > 1:
+            embeds += build_reward_image_embeds(reward, "new")[:9]
         embeds[0]["footer"] = {"text": "Test message — Twitch Drops Tracker"}
     else:
         embeds = [
@@ -473,28 +480,35 @@ def build_reward_lines(reward: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _unique_reward_images(reward: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return (title, image URL) pairs for each unique loot image, in order."""
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for tbd in ordered_drops(reward):
+        url = first_drop_image_url(tbd)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        pairs.append((format_reward_name(tbd), url))
+
+    return pairs
+
+
+def unique_drop_images(reward: dict[str, Any]) -> list[str]:
+    """Return the unique loot image URLs for a reward, in drop order."""
+    return [url for _, url in _unique_reward_images(reward)]
+
+
 def build_reward_image_embeds(
     reward: dict[str, Any], event: str
 ) -> list[dict[str, Any]]:
     """One embed per unique loot image, rendered as Discord's large image."""
     color = EVENT_COLORS.get(event, COLOR_NEW)
-    embeds: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-
-    for tbd in ordered_drops(reward):
-        url = first_drop_image_url(tbd)
-        if not url or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        embeds.append(
-            {
-                "title": format_reward_name(tbd)[:256],
-                "image": {"url": url},
-                "color": color,
-            }
-        )
-
-    return embeds
+    return [
+        {"title": title[:256], "image": {"url": url}, "color": color}
+        for title, url in _unique_reward_images(reward)
+    ]
 
 
 def build_embed(
@@ -503,6 +517,7 @@ def build_embed(
     box_art: Optional[str],
     event: str,
     now: dt.datetime,
+    image_url: Optional[str] = None,
 ) -> dict[str, Any]:
     reward_name = reward.get("name") or "Twitch Drops campaign"
     description = (reward.get("description") or "").strip()
@@ -548,6 +563,9 @@ def build_embed(
 
     if box_art:
         embed["thumbnail"] = {"url": box_art}
+
+    if image_url:
+        embed["image"] = {"url": image_url}
 
     return embed
 
@@ -789,10 +807,17 @@ def run_scan(dry_run: bool = False) -> list[dict[str, Any]]:
                 )
                 continue
 
-            embeds = [build_embed(reward, game_name, box_art, event, now)]
-            # Discord caps a webhook message at 10 embeds, so keep the main
-            # embed and show at most 9 loot images.
-            embeds += build_reward_image_embeds(reward, event)[:9]
+            image_urls = unique_drop_images(reward)
+            # A single loot image reads best inside the main embed; multiple
+            # unique images become follow-up embeds (capped to Discord's 10).
+            main_image = image_urls[0] if len(image_urls) == 1 else None
+            embeds = [
+                build_embed(
+                    reward, game_name, box_art, event, now, image_url=main_image
+                )
+            ]
+            if len(image_urls) > 1:
+                embeds += build_reward_image_embeds(reward, event)[:9]
             if not send_webhook(embeds):
                 # Keep the event un-notified so it is retried on the next scan.
                 log.warning("Skipping state update for %s (send failed).", reward_id)
