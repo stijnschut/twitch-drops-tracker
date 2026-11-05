@@ -58,7 +58,7 @@ ALERT_ON_FAILURE = os.getenv("ALERT_ON_FAILURE", "false").lower() in (
 FAILURE_COOLDOWN_SECONDS = float(os.getenv("FAILURE_COOLDOWN_SECONDS", "43200"))
 
 API_BASE_URL = os.getenv(
-    "API_BASE_URL", "https://twitch-drops-api.sunkwi.com"
+    "API_BASE_URL", "https://drops.sunkwi.com/api/twitch"
 ).rstrip("/")
 API_TIMEOUT_SECONDS = float(os.getenv("API_TIMEOUT_SECONDS", "30"))
 
@@ -230,9 +230,10 @@ def fetch_drops() -> list[dict[str, Any]]:
     )
     resp.raise_for_status()
     data = resp.json()
-    # Legacy endpoint returns the array directly; v2 wraps it in {data: []}.
+    # Legacy endpoint returns the array directly; v2 wraps it in {data: []},
+    # the current endpoint in {games: []}.
     if isinstance(data, dict):
-        data = data.get("data", data)
+        data = data.get("games", data.get("data", data))
     if not isinstance(data, list):
         raise ValueError("Unexpected API response shape (expected a list).")
     return data

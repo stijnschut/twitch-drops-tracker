@@ -46,7 +46,7 @@ watchlist.json (gameDisplayName strings)
         │
         ▼
 scanner.py
-  1. GET https://twitch-drops-api.sunkwi.com/drops
+  1. GET https://drops.sunkwi.com/api/twitch/drops
   2. Filter campaigns where gameDisplayName is in the watchlist
   3. Diff against state.json (previous scan)
   4. For new / starting-soon / ending-soon / changed campaigns:
@@ -135,7 +135,7 @@ All settings are environment variables, read from `.env` (see
 | `NOTIFY_ON_CHANGES` | `true` | Notify when a known campaign's rewards change. |
 | `ALERT_ON_FAILURE` | `false` | Send a "scan failed" alert if the API is down. |
 | `FAILURE_COOLDOWN_SECONDS` | `43200` | Min. gap between failure alerts. |
-| `API_BASE_URL` | `https://twitch-drops-api.sunkwi.com` | API base. |
+| `API_BASE_URL` | `https://drops.sunkwi.com/api/twitch` | API base. |
 | `API_TIMEOUT_SECONDS` | `30` | HTTP timeout. |
 
 ### Timezone examples
